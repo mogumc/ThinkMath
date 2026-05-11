@@ -71,12 +71,9 @@ cumcmthesis支持以下常用选项：
 在 `\begin{document}` 之后、`\maketitle` 之前，必须添加以下初始化命令：
 ```latex
 \begin{document}
-\thispagestyle{empty}  % 摘要页不需要页码
 \title{论文标题}
 \maketitle
 ```
-- **`\setcounter{section}{-1}`**：将章节计数器设为 -1，使第一个 `\section` 编号为 0（适用于某些论文格式要求）
-- **`\setcounter{page}{1}`**：将页码计数器设为 1，确保正文从第 1 页开始编号
 
 ### 10. 特殊环境
 - 算法环境：使用`algorithm`和`algorithmic`环境
@@ -85,9 +82,11 @@ cumcmthesis支持以下常用选项：
 
 ### 11. 摘要页规范（强制）
 - **摘要页必须隐藏页码**：在`\begin{abstract}`之后立即添加`\thispagestyle{empty}`，确保摘要页不显示页码
-- **摘要结束后必须换页**：在`\end{abstract}`之后立即添加`\newpage`，确保摘要页与正文分开
+- **摘要结束后必须修复页码**：在`\end{abstract}`之后立即添加`\setcounter{section}{-1}`，将章节计数器设为 -1，使第一个 `\section` 编号为 0；添加`\setcounter{page}{1}`，将页码计数器设为 1，确保正文从第 1 页开始编号
+
 - **完整格式**：
   ```latex
+  \thispagestyle{empty}  % 摘要页不需要页码
   \begin{abstract}
   摘要内容...
   \end{abstract}
