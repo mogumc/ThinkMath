@@ -1,7 +1,7 @@
 ---
 name: thinkmath
 description: 数学建模全链路自动化执行skill，支持从问题输入到最终论文输出的完整闭环。当用户需要解决数学建模问题、生成Python求解代码、创建可视化图表或生成标准数学建模论文时使用此skill。
-version: "2.1"
+version: "2.2"
 ---
 
 # ThinkMath Skill 执行规范

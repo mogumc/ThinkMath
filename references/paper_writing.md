@@ -17,6 +17,11 @@
 - **复制cumcmthesis模板**：从tools文件夹复制`cumcmthesis.cls`到工作目录
 - **文档类设置**：documentclass: cumcmthesis，使用gbt7714、algorithm、algorithmic、amsmath、amssymb包
 
+### 3.5 cumcmthesis 模板规范
+- **必须读取**：`tools/cumcmthesis_usage.md`
+- 本文件包含摘要页规范、文档初始化设置、编译要求等 cumcmthesis 模板的强制格式规范
+- 论文编写层**必须在编写前读取此文件**，并严格遵守其中的所有规范
+
 ### 4. 内容编写
 - **摘要编写**：问题概述、方法介绍、主要结果、结论总结
 - **问题重述**：用学术语言重新描述问题
