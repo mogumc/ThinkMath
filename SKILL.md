@@ -1,7 +1,7 @@
 ---
 name: thinkmath
 description: 数学建模全链路自动化执行skill，支持从问题输入到最终论文输出的完整闭环。当用户需要解决数学建模问题、生成Python求解代码、创建可视化图表或生成标准数学建模论文时使用此skill。
-version: "2.0"
+version: "2.1"
 ---
 
 # ThinkMath Skill 执行规范
@@ -63,7 +63,8 @@ version: "2.0"
 - **必须读取**：`references/problem_parsing.md`
 - **输入**：用户提供的数学建模问题文本
 - **输出**：`problem_data.json` + `analysis_report.md` + `original_problem.txt`
-- **核心任务**：问题重述 → 约束条件提取 → 决策变量识别 → 目标函数确定 → 问题分类 → 创建题目数据记忆 → 验证解析结果
+- **核心任务**：问题重述 → 约束条件提取 → 决策变量识别 → 目标函数确定 → 代码建模需求评估 → 问题分类 → 创建题目数据记忆 → 验证解析结果
+- **代码评估**：在本层即判断 `code_complexity_level`（none/simple/complex），为论文附录是否插入代码提供依据
 - **状态输出**：`【当前执行层级：题目解析层】`
 
 ### 第 2 层：题目解答层
@@ -91,9 +92,10 @@ version: "2.0"
 
 ### 第 5 层：论文编写层
 - **必须读取**：`references/paper_writing.md` + `tools/cumcmthesis_usage.md`
-- **输入**：解答结果 + 数据分析报告 + 可视化图表
+- **输入**：解答结果 + 数据分析报告 + 可视化图表 + `problem_data.json`（读取 `code_complexity_level`）
 - **输出**：`paper/paper.tex` + `paper/reference.bib` + `paper/cumcmthesis.cls`
 - **核心任务**：按标准章节结构编写论文（摘要→问题重述→问题分析→模型假设→符号说明→模型建立→模型求解→结果分析→模型评价→参考文献→附录）
+- **附录条件**：根据 `code_complexity_level` 决定是否插入代码附录（none/simple→不插入，complex→必须插入关键代码）
 - **编译流程**：`xelatex` → `biber` → `xelatex` → `xelatex`（共三次编译）
 - **状态输出**：`【当前执行层级：论文编写层】`
 
