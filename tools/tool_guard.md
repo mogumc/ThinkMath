@@ -1,13 +1,12 @@
-# 工具保障层
-
-## 层级概述
-本层级负责保障工具调用可靠性，并在工具调用失败时提供重试和降级机制，确保任务链的连续性和稳定性。
+# 🛡️ 工具执行保障层规范（ToolGuard）
+> 定位：工具调用可靠性保障｜失败重试｜降级｜响应校验｜Anti-Loop
 
 ## 1. 核心准则
 - **可靠优先**：工具调用失败不应导致整个任务链断裂，必须提供重试或降级路径
 - **响应必校**：每次工具调用返回后必须校验响应有效性，不合格则重试而非直接接受
 - **拒绝空响应**：当工具返回空内容或不合格结果时，必须重新思考并重试，禁止将空/无效结果原样返回给用户
-- **退避有界**：所有重试必须有硬性次数上限和总耗时上限，防止无限循环
+- **退避有界**：所有重试必须有硬性次数上限和总耗时上限，**防止无限循环**
+- **Anti-Loop 硬约束**：同一工具同一参数连续调用不得超过 3 次，超过必须终止并报告
 
 ## 2. 工具调用全流程
 
@@ -21,12 +20,13 @@
   - 自然幂等（读取/查询类）：无条件可重试
   - 条件幂等（写入类）：必须携带幂等标识
   - 非幂等（创建类）：重试前需先查询确认未重复执行
-- [ ] 确定该工具的**备选降级方案**（如果有其他 Agent 可完成相同任务）
+- [ ] 确定该工具的**备选降级方案**（如果有其他方式可完成相同任务）
+- [ ] **检查调用历史**：同一工具+同一参数是否已调用过？如果是，必须调整参数或终止
 
 ### 2.2 发起调用与响应校验
 
 ```text
-步骤 1：向目标 Agent 工具发起调用，附带明确的参数和预期格式要求
+步骤 1：向目标工具发起调用，附带明确的参数和预期格式要求
     ↓
 步骤 2：等待工具返回响应
     ↓
@@ -56,12 +56,13 @@
 | 错误码 | 场景示例 | 处理策略 |
 |:---|:---|:---|
 | `TIMEOUT` | 工具调用超时未响应 | 退避重试 |
-| `RATE_LIMITED` | Agent 被限流，返回 429 或类似提示 | 延长间隔后重试 |
-| `SERVICE_UNAVAILABLE` | 目标 Agent 不可用 / 服务异常 | **Agent 降级**：切换到备选 Agent 执行相同任务 |
+| `RATE_LIMITED` | 被限流，返回 429 或类似提示 | 延长间隔后重试 |
+| `SERVICE_UNAVAILABLE` | 目标工具不可用 / 服务异常 | **降级**：切换到备选方案执行相同任务 |
 | `NETWORK_ERROR` | 网络连接中断、DNS 解析失败 | 退避重试 |
 | `INVALID_PARAMS` | 参数格式错误、缺少必要字段 | **快速终止**：修正参数后重新调用（不消耗重试次数） |
 | `PERMISSION_DENIED` | 权限不足、访问被拒绝 | **快速终止**：报告用户，请求授权 |
 | `EMPTY_RESPONSE` | 工具返回了空内容或无效响应 | 退避重试（最多 2 次），仍为空则切换策略 |
+| `LOOP_DETECTED` | 检测到重复调用或循环模式 | **立即终止**：报告循环原因，停止当前工具调用 |
 | `UNKNOWN` | 无法归类的未知错误 | 保守策略：退避重试 |
 
 ### 3.2 三种核心处理策略
@@ -71,49 +72,51 @@
 **适用场景**：瞬时错误（TIMEOUT / RATE_LIMITED / NETWORK_ERROR / EMPTY_RESPONSE / UNKNOWN）
 
 **规则**：
-- 最大重试次数：**3 次**
+- 最大重试次数：**3 次**（硬性上限，不可突破）
 - 退避公式：`delay = min(1000ms × 2^attempt, 10000ms)`
 - 每次重试前必须**调整请求方式**（如换一种参数表达、简化请求、补充上下文），不能完全重复相同调用
 - 重试期间记录日志：尝试编号、错误码、耗时、调整措施
+- **Anti-Loop 检查**：每次重试前检查是否与前次调用参数完全相同，如果是则立即终止
 
 ```
 第 1 次重试：等待 1 秒，微调参数或补充上下文后重试
 第 2 次重试：等待 2 秒，换一种提问方式或拆分请求后重试
 第 3 次重试：等待 4 秒，使用最简化的请求形式最后尝试一次
-超过 3 次 → 转入 Agent 降级或终止报错
+超过 3 次 → 转入降级或终止报错（【ToolGuard】重试耗尽）
 ```
 
-#### 策略二：Agent 降级（Agent Fallback）
+#### 策略二：降级（Fallback）
 
 **适用场景**：SERVICE_UNAVAILABLE / 重试耗尽后的兜底
 
 **规则**：
-- 维护每类任务的 **Agent 优先级列表**（按能力匹配度排序）
-- 当前 Agent 失败时，按优先级列表顺序切换到下一个 Agent
+- 维护每类任务的 **备选方案优先级列表**（按能力匹配度排序）
+- 当前方案失败时，按优先级列表顺序切换到下一个方案
 - 降级是**路径切换**，不是重复尝试——不计入重试计数
-- 降级成功后记录可用性数据，后续同类型任务可优先使用成功的 Agent
-- 所有备选 Agent 均失败 → 终止并报告详细原因
+- 降级成功后记录可用性数据，后续同类型任务可优先使用成功的方案
+- 所有备选方案均失败 → 终止并报告详细原因
 
 ```
-示例：代码搜索任务
-  优选 Agent: code-explorer → 失败？
+示例：Python 代码执行任务
+  优选方案: execute_command(python script.py) → 失败？
     ↓ 降级
-  备选 Agent: 直接 search_content + read_file 组合 → 失败？
+  备选方案: 拆分为多个小脚本分别执行 → 失败？
     ↓ 降级
-  兜底: list_files + 手动遍历 → 全部失败？
+  兜底: 提供代码让用户手动执行 → 全部失败？
     ↓ 终止
-  报告用户：所有搜索路径均不可用，附具体错误链
+  报告用户：所有执行路径均不可用，附具体错误链
 ```
 
 #### 策略三：快速终止（Fast Fail）
 
-**适用场景**：INVALID_PARAMS / PERMISSION_DENIED / 确认不可恢复的错误
+**适用场景**：INVALID_PARAMS / PERMISSION_DENIED / LOOP_DETECTED / 确认不可恢复的错误
 
 **规则**：
 - 不消耗重试配额
 - 立即停止当前工具调用
 - 向用户明确报告错误原因和修复建议
 - 如果是参数问题，修正参数后可重新发起全新调用
+- **如果是循环检测**，必须输出完整的调用历史供用户排查
 
 ## 4. 响应不合格时的行为规范
 
@@ -129,6 +132,7 @@
    - 输出"没有找到相关内容"后结束
    - 用猜测或编造的内容填充空位
    - 跳过当前步骤继续后续流程
+   - 使用完全相同的参数再次调用（构成循环）
 
 ✅ 正确做法：
    - 记录空响应事件（工具名、参数、时间戳）
@@ -147,12 +151,13 @@
    - 将不合格结果包装后输出给用户
    - 用"可能是因为..."之类的模糊表述掩盖问题
    - 自行编造合理的数据填充缺口
+   - 重复调用同一工具期望得到不同结果
 
 ✅ 正确做法：
    - 明确指出哪里不合格（缺字段？类型错？内容无关？）
    - 基于已返回的部分信息判断是否可以再次请求补全
    - 用更精确的参数或更窄的范围重新发起调用
-   - 若多次仍不合格，切换到备选工具或 Agent
+   - 若多次仍不合格，切换到备选工具或方案
    - 最终无法获取有效数据时，如实告知用户限制所在
 ```
 
@@ -165,7 +170,8 @@
 | 连续 2 次同一工具返回空/无效响应 | 暂停，分析原因，更换调用策略 |
 | 返回内容与请求意图完全不相关 | 检查参数传递是否被误解，重新构造请求 |
 | 工具抛出未预期的错误格式 | 查阅工具文档确认正确用法后再尝试 |
-| 降级到新 Agent 后首次调用失败 | 回顾之前的失败模式，避免在新 Agent 上重复 |
+| 降级到新方案后首次调用失败 | 回顾之前的失败模式，避免在新方案上重复 |
+| 检测到输出内容开始重复 | **立即终止循环**，报告循环原因 |
 
 **重新思考不是简单重试——它要求 AI 检视已有失败记录，调整策略后再行动。**
 
@@ -173,16 +179,21 @@
 
 ```text
 FUNCTION executeToolWithGuard(toolName, params, expectedFormat):
-    context = RetryContext(attempt=0, triedAgents=[], errors=[])
+    context = RetryContext(attempt=0, triedSolutions=[], errors=[], callHistory=[])
+
+    // Anti-Loop: 检查是否已用完全相同的参数调用过
+    IF callHistory.contains(toolName, params):
+        RETURN 快速终止(LOOP_DETECTED, "相同参数已调用过，拒绝重复调用")
 
     WHILE true:
-        // 步骤 1：选择执行 Agent
-        agent = selectAgent(toolName, context.triedAgents)
-        IF agent == NULL:
-            RETURN 终止报告(ALL_AGENTS_EXHAUSTED, context.errors)
+        // 步骤 1：选择执行方案
+        solution = selectSolution(toolName, context.triedSolutions)
+        IF solution == NULL:
+            RETURN 终止报告(ALL_SOLUTIONS_EXHAUSTED, context.errors)
 
         // 步骤 2：发起调用
-        result = agent.call(toolName, params)
+        result = solution.call(toolName, params)
+        context.callHistory.append({toolName, params, timestamp=now()})
 
         // 步骤 3：响应校验
         IF result.success AND validateResponse(result.data, expectedFormat):
@@ -191,26 +202,26 @@ FUNCTION executeToolWithGuard(toolName, params, expectedFormat):
         // 步骤 4：错误分类
         error = classifyError(result)
 
-        IF error.code IN [INVALID_PARAMS, PERMISSION_DENIED]:
+        IF error.code IN [INVALID_PARAMS, PERMISSION_DENIED, LOOP_DETECTED]:
             RETURN 快速终止(error)  // 不可恢复错误
 
         IF error.code == SERVICE_UNAVAILABLE:
-            context.triedAgents.append(agent.name)
+            context.triedSolutions.append(solution.name)
             context.errors.append(error)
-            CONTINUE  // Agent 降级，重置重试计数
+            CONTINUE  // 降级，重置重试计数
         END IF
 
         IF error.code IN [TIMEOUT, RATE_LIMITED, NETWORK_ERROR, EMPTY_RESPONSE, UNKNOWN]:
             IF context.attempt < 3:
                 context.attempt += 1
                 delay = min(1000 * 2^context.attempt, 10000)
-                params = adjustStrategy(params, context.attempt, error)  // 关键：调整策略！
+                params = adjustStrategy(params, context.attempt, error)  // 关键：必须调整策略！
                 sleep(delay)
                 CONTINUE  // 退避重试
             ELSE:
-                // 重试耗尽 → 尝试 Agent 降级
-                context.triedAgents.append(agent.name)
-                context.attempt = 0  // 降级到新 Agent 时重置
+                // 重试耗尽 → 尝试降级
+                context.triedSolutions.append(solution.name)
+                context.attempt = 0  // 降级到新方案时重置
                 CONTINUE
             END IF
         END IF
@@ -228,44 +239,60 @@ END FUNCTION
 | 记录项 | 说明 |
 |:---|:---|
 | 工具名称 | 被调用的工具标识 |
-| 目标 Agent | 执行该工具的 Agent 名称 |
+| 执行方案 | 执行该工具的方案名称 |
 | 请求摘要 | 参数的关键信息（脱敏） |
 | 响应状态 | 成功 / 失败（含错误码） |
 | 尝试序号 | 第几次尝试（初始=0） |
 | 总耗时 | 从首次调用到最终结果的累计耗时 |
-| 策略调整 | 重试时做了什么调整（如"换用了相对路径""补充了 fileTypes 参数"） |
+| 策略调整 | 重试时做了什么调整（如"换用了相对路径""补充了参数"） |
 
 当最终向用户报告结果时，如果经历了重试或降级，应在响应末尾附加简要说明：
 
 ```
-【ToolGuard 日志】工具 read_file 经历 2 次重试后成功（首超时，次路径调整）
+【ToolGuard 日志】工具 execute_command 经历 2 次重试后成功（首次超时，次次调整参数）
 ```
 
-## 7. 与路由系统的集成关系
+## 7. 与层级系统的集成关系
 
-ToolGuard 是**透明中间层**，位于路由决策之后、层文件执行过程之中：
+ToolGuard 是**透明中间层**，位于层级决策之后、层文件执行过程之中：
 
 ```
 用户请求
-  → 路由决策（SKILL.md 四、确定加载哪个层文件）
-  → 加载对应层规范（architecture / implementation / review / iteration）
-  → 按 Layer 规范执行任务
-     → 过程中需要调用工具（rw / fetch / task / search ...）
-        → 【ToolGuard 介入】→ 重试 / 降级 / 校验 → 返回有效结果
+  → 层级决策（SKILL.md 四、确定加载哪个层文件）
+  → 加载对应层规范（problem_parsing / problem_solving / data_analysis ...）
+  → 按层规范执行任务
+     → 过程中需要调用工具
+        → 【ToolGuard 介入】→ 校验 → 重试 / 降级 → 返回有效结果
      → 继续执行层规范要求的后续步骤
   → 向用户输出最终结果
 ```
 
-**关键原则：ToolGuard 不改变路由决策逻辑，不替代四层规范，仅在工具调用环节提供可靠性保障。**
+**关键原则：ToolGuard 不改变层级决策逻辑，不替代各层规范，仅在工具调用环节提供可靠性保障。**
 
 ## 8. 特殊工具类型的降级映射表
 
 | 主工具 | 降级备选 1 | 降级备选 2 | 降级条件 |
 |:---|:---|:---|:---|
-| `task(code-explorer)` | 直接用 `search_content` + `read_file` 组合 | `list_files` + 手动筛选 | code-explorer 无响应或超时 |
-| `web_fetch` | 使用 `search_content` 搜索本地缓存 | 报告用户手动提供内容 | URL 不可达或返回异常 |
-| `execute_command` | 改用 `write_to_file` + 手工指导 | 提供命令让用户自行执行 | 命令执行环境不可用 |
-| `search_file` | `list_files` + 逐目录扫描 | `task(code-explorer)` 广度搜索 | 搜索模式过于复杂导致超时 |
-| `read_file` | 尝试用 `search_content` 定位关键行 | 请求用户提供文件片段 | 文件过大或编码异常 |
+| `execute_command(python)` | 拆分为多个小脚本分别执行 | 提供代码让用户手动执行 | 命令执行环境不可用或超时 |
+| `web_fetch` | 使用 search_content 搜索本地缓存 | 报告用户手动提供内容 | URL 不可达或返回异常 |
+| `read_file` | 尝试用 search_content 定位关键行 | 请求用户提供文件片段 | 文件过大或编码异常 |
+| `write_file` | 使用 execute_command(echo/cat) 写入 | 提供内容让用户手动创建文件 | 写入权限不足或路径不存在 |
 
----
+## 9. Anti-Loop 硬约束（防卡死机制）
+
+### 9.1 调用历史追踪
+- 每次工具调用必须记录：{工具名, 参数摘要, 时间戳, 结果状态}
+- 每次新调用前必须检查调用历史，发现相同工具+相同参数的重复调用时立即终止
+
+### 9.2 循环检测信号
+当检测到以下任一信号时，**必须立即终止当前循环**：
+- 同一工具+同一参数连续调用 3 次
+- 输出内容开始重复（检测到与前 2 次输出高度相似）
+- 同一问题的解答代码连续 3 次执行失败
+- 同一问题的数据分析连续 3 次打回
+
+### 9.3 终止后行为
+- 输出 `【ToolGuard - 循环终止】已达到最大重试次数，当前任务标记为"待人工介入"`
+- 记录终止原因和已尝试的完整策略链
+- 向用户报告需要手动处理的任务清单
+- **不要**尝试用"换个说法"绕过循环检测——这是红线
